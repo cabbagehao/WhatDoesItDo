@@ -37,10 +37,63 @@
             background-color: #cccccc;
             cursor: not-allowed;
         }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 34px;
+            margin-bottom: 10px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 26px;
+            width: 26px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #4CAF50;
+        }
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+        .switch-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
     </style>
 </head>
 <body>
     <h2>Domain Explainer</h2>
+    <div class="switch-container">
+        <span>功能开关：</span>
+        <label class="switch">
+            <input type="checkbox" id="featureToggle" checked>
+            <span class="slider"></span>
+        </label>
+    </div>
     <button id="explainButton">解释域名</button>
     <div id="status" class="status">
         等待操作...
@@ -51,6 +104,30 @@
         滚动页面时，新出现的域名会自动获取解释。
     </p>
     <script>
+        // 初始化开关状态
+        document.addEventListener('DOMContentLoaded', async () => {
+            const toggle = document.getElementById('featureToggle');
+            // 从storage获取开关状态
+            const result = await chrome.storage.local.get('featureEnabled');
+            toggle.checked = result.featureEnabled !== false; // 默认为true
+        });
+
+        // 监听开关变化
+        document.getElementById('featureToggle').addEventListener('change', async (e) => {
+            const enabled = e.target.checked;
+            // 保存开关状态
+            await chrome.storage.local.set({ featureEnabled: enabled });
+            
+            // 获取当前标签页
+            const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+            
+            // 发送消息到content script
+            await chrome.tabs.sendMessage(tab.id, {
+                action: enabled ? 'ENABLE_FEATURE' : 'DISABLE_FEATURE'
+            });
+        });
+
+        // 解释按钮点击事件
         document.getElementById('explainButton').addEventListener('click', async () => {
             const button = document.getElementById('explainButton');
             const status = document.getElementById('status');

@@ -17,40 +17,81 @@ chrome.runtime.onInstalled.addListener(() => {
 function watchForChanges() {
     log('开始监听文件变化');
     
-    // 获取插件ID
-    const extensionId = chrome.runtime.id;
-    
-    // 监听文件变化
-    const filesInDirectory = dir => new Promise(resolve =>
-        dir.createReader().readEntries(entries => {
-            const files = entries.filter(e => e.isFile);
-            const directories = entries.filter(e => e.isDirectory);
-            Promise.all([...files, ...directories.map(d => filesInDirectory(d))])
-                .then(files => [].concat(...files))
-                .then(resolve);
-        })
-    );
-
-    const timestampForFilesInDirectory = dir =>
-        filesInDirectory(dir).then(files =>
-            files.map(f => f.name + f.lastModifiedDate).join());
-
-    const reload = () => {
-        log('检测到文件变化，重新加载插件');
-        chrome.runtime.reload();
-    };
-
-    const watchChanges = (dir, lastTimestamp) => {
-        timestampForFilesInDirectory(dir).then(timestamp => {
-            if (!lastTimestamp || (lastTimestamp === timestamp)) {
-                setTimeout(() => watchChanges(dir, timestamp), 1000); // 每秒检查一次
-            } else {
-                reload();
-            }
+    // 获取当前目录下所有文件的时间戳
+    const getFilesTimestamp = () => new Promise((resolve) => {
+        chrome.runtime.getPackageDirectoryEntry((root) => {
+            root.createReader().readEntries((entries) => {
+                const files = entries.filter(e => e.isFile);
+                Promise.all(
+                    files.map(file => new Promise((resolve) => {
+                        file.getMetadata((metadata) => {
+                            resolve({
+                                name: file.name,
+                                timestamp: metadata.modificationTime.getTime()
+                            });
+                        });
+                    }))
+                ).then((filesData) => {
+                    log('当前目录文件列表', filesData);
+                    resolve(filesData);
+                });
+            });
         });
+    });
+
+    // 重新加载content script
+    const reloadContentScript = async () => {
+        log('检测到文件变化，准备重新加载');
+        
+        // 获取所有打开的标签页
+        const tabs = await chrome.tabs.query({url: "https://*.semrush.com/*"});
+        log('找到相关标签页', tabs.length);
+        
+        // 重新注入content script
+        for (const tab of tabs) {
+            try {
+                log(`重新注入content script到标签页 ${tab.id}`);
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['content.js']
+                });
+                log(`标签页 ${tab.id} 注入成功`);
+            } catch (error) {
+                log(`标签页 ${tab.id} 注入失败`, error);
+            }
+        }
+        
+        // 如果没有找到相关标签页，重载整个插件
+        if (tabs.length === 0) {
+            log('未找到相关标签页，重载整个插件');
+            chrome.runtime.reload();
+        }
     };
 
-    chrome.runtime.getPackageDirectoryEntry(dir => watchChanges(dir));
+    // 开始监听文件变化
+    let lastTimestamps = null;
+    const checkChanges = async () => {
+        const currentTimestamps = await getFilesTimestamp();
+        
+        if (lastTimestamps) {
+            // 检查是否有文件发生变化
+            const hasChanges = currentTimestamps.some(current => {
+                const previous = lastTimestamps.find(last => last.name === current.name);
+                return !previous || previous.timestamp !== current.timestamp;
+            });
+            
+            if (hasChanges) {
+                log('检测到文件变化');
+                await reloadContentScript();
+            }
+        }
+        
+        lastTimestamps = currentTimestamps;
+        setTimeout(checkChanges, 1000); // 每秒检查一次
+    };
+
+    // 启动监听
+    checkChanges();
     log('文件监听器已启动');
 }
 

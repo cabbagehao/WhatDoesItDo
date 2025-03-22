@@ -7,7 +7,8 @@
     "activeTab",
     "scripting",
     "management",
-    "tabs"
+    "tabs",
+    "storage"
   ],
   "host_permissions": [
     "https://*.semrush.com/*"

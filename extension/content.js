@@ -1,5 +1,6 @@
-// 存储已经解释过的域名
-let explainedDomains = new Set();
+// 全局变量
+let isFeatureEnabled = true;
+let processedDomains = new Set();
 
 // 日志函数
 function log(message, data = null) {
@@ -11,116 +12,157 @@ function log(message, data = null) {
     }
 }
 
-// 监听来自popup的消息
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'EXPLAIN_DOMAINS') {
-        log('收到popup触发请求');
+// 清除所有域名解释
+function clearDomainExplanations() {
+    log('清除所有域名解释');
+    const explanations = document.querySelectorAll('.domain-explanation');
+    explanations.forEach(el => el.remove());
+    processedDomains.clear();
+}
+
+// 处理域名
+async function processDomains() {
+    if (!isFeatureEnabled) {
+        log('功能已关闭，跳过处理');
+        return;
+    }
+
+    const domains = [];
+    const rows = document.querySelectorAll('tbody tr');
+    
+    rows.forEach(row => {
+        const domainCell = row.querySelector('td:nth-child(2)');
+        if (domainCell && domainCell.textContent) {
+            const domain = domainCell.textContent.trim();
+            if (!processedDomains.has(domain)) {
+                domains.push(domain);
+                processedDomains.add(domain);
+            }
+        }
+    });
+
+    if (domains.length > 0) {
+        log(`发现新域名：${domains.length}个`, domains);
+        
+        try {
+            const response = await fetch('http://localhost:5000/explain', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ domains })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            // 添加解释到页面
+            rows.forEach(row => {
+                const domainCell = row.querySelector('td:nth-child(2)');
+                if (domainCell) {
+                    const domain = domainCell.textContent.trim();
+                    const explanation = data[domain];
+                    
+                    if (explanation && !row.querySelector('.domain-explanation')) {
+                        const explanationDiv = document.createElement('div');
+                        explanationDiv.className = 'domain-explanation';
+                        explanationDiv.style.color = '#666';
+                        explanationDiv.style.fontSize = '0.9em';
+                        explanationDiv.style.marginTop = '5px';
+                        explanationDiv.textContent = explanation;
+                        domainCell.appendChild(explanationDiv);
+                    }
+                }
+            });
+
+            // 更新插件状态
+            chrome.runtime.sendMessage({
+                type: 'STATUS',
+                active: true
+            });
+
+        } catch (error) {
+            log('处理域名时出错', error);
+            chrome.runtime.sendMessage({
+                type: 'STATUS',
+                active: false
+            });
+        }
+    }
+}
+
+// 初始化功能
+async function initializeFeature() {
+    // 从storage获取开关状态
+    const result = await chrome.storage.local.get('featureEnabled');
+    isFeatureEnabled = result.featureEnabled !== false; // 默认为true
+    
+    if (isFeatureEnabled) {
+        // 页面加载完成后自动处理一次
         processDomains();
-        sendResponse({status: 'processing'});
+    }
+}
+
+// 监听消息
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    log('收到消息', request);
+    
+    if (request.action === 'EXPLAIN_DOMAINS') {
+        processDomains().then(() => {
+            sendResponse({status: 'processing'});
+        }).catch(error => {
+            log('处理域名时出错', error);
+            sendResponse({status: 'error', message: error.message});
+        });
+        return true;
+    } else if (request.action === 'ENABLE_FEATURE') {
+        isFeatureEnabled = true;
+        processDomains(); // 重新处理所有域名
+        sendResponse({status: 'enabled'});
+    } else if (request.action === 'DISABLE_FEATURE') {
+        isFeatureEnabled = false;
+        clearDomainExplanations();
+        sendResponse({status: 'disabled'});
     }
 });
 
-// 监听页面滚动
+// 监听DOM变化
+const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+            const hasNewRows = Array.from(mutation.addedNodes).some(node => 
+                node.nodeName === 'TR' || node.querySelector?.('tr')
+            );
+            
+            if (hasNewRows) {
+                log('检测到新的表格行');
+                processDomains();
+                break;
+            }
+        }
+    }
+});
+
+// 启动观察器
+const tbody = document.querySelector('tbody');
+if (tbody) {
+    observer.observe(tbody, { childList: true, subtree: true });
+    log('DOM观察器已启动');
+}
+
+// 初始化
+initializeFeature();
+
+// 监听滚动事件
 let scrollTimeout;
 window.addEventListener('scroll', () => {
-    log('页面滚动事件触发');
+    if (!isFeatureEnabled) return;
+    
     clearTimeout(scrollTimeout);
-    scrollTimeout = setTimeout(processDomains, 1000); // 改为1秒间隔
-});
-
-// 处理域名的主函数
-async function processDomains() {
-    try {
-        log('开始处理域名');
-        
-        // 获取所有域名元素
-        const domainElements = document.querySelectorAll('a[href*="/website/"][href*="/overview/"]');
-        log('找到域名元素数量', domainElements.length);
-        
-        const newDomains = [];
-        
-        // 收集未解释过的域名
-        domainElements.forEach(element => {
-            const domain = element.textContent.trim();
-            if (!explainedDomains.has(domain)) {
-                newDomains.push(domain);
-                explainedDomains.add(domain);
-            }
-        });
-        
-        log('新发现的域名数量', newDomains.length);
-        if (newDomains.length > 0) {
-            log('待处理的域名列表', newDomains);
-        }
-        
-        if (newDomains.length === 0) {
-            log('没有新的域名需要处理');
-            return;
-        }
-        
-        // 调用后端API获取域名解释
-        log('开始调用后端API');
-        const response = await fetch('http://localhost:5000/explain-domains', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ domains: newDomains })
-        });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const explanations = await response.json();
-        log('收到后端响应', explanations);
-        
-        // 为每个域名添加解释
-        log('开始在页面上添加解释');
-        let addedCount = 0;
-        
-        domainElements.forEach(element => {
-            const domain = element.textContent.trim();
-            if (explanations[domain]) {
-                const explanation = explanations[domain];
-                
-                // 检查是否已经添加了解释
-                const existingExplanation = element.nextElementSibling?.classList.contains('domain-explanation');
-                if (!existingExplanation) {
-                    const explanationDiv = document.createElement('div');
-                    explanationDiv.className = 'domain-explanation';
-                    explanationDiv.style.color = '#666';
-                    explanationDiv.style.fontSize = '12px';
-                    explanationDiv.style.marginTop = '4px';
-                    explanationDiv.textContent = explanation;
-                    
-                    // 将解释插入到域名链接后面
-                    element.parentNode.insertBefore(explanationDiv, element.nextSibling);
-                    addedCount++;
-                }
-            }
-        });
-        
-        log(`成功添加${addedCount}个域名解释`);
-        
-        // 更新插件状态
-        chrome.runtime.sendMessage({type: 'STATUS', active: true})
-            .then(response => {
-                log('状态更新成功', response);
-            })
-            .catch(error => {
-                log('状态更新失败', error);
-            });
-        
-    } catch (error) {
-        log('处理域名时出错', error);
-        // 通知background script出错状态
-        chrome.runtime.sendMessage({type: 'STATUS', active: false})
-            .then(response => {
-                log('已通知background错误状态', response);
-            })
-            .catch(error => {
-                log('通知background错误状态失败', error);
-            });
-    }
-} 
+    scrollTimeout = setTimeout(() => {
+        processDomains();
+    }, 1000);
+}); 
