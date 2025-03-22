@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            width: 300px;
+            padding: 10px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .active {
+            background-color: #e6ffe6;
+            color: #006600;
+        }
+        .inactive {
+            background-color: #ffe6e6;
+            color: #660000;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <h2>Domain Explainer</h2>
+    <button id="explainButton">解释域名</button>
+    <div id="status" class="status">
+        等待操作...
+    </div>
+    <p>
+        点击"解释域名"按钮获取当前页面域名的解释。
+        <br><br>
+        滚动页面时，新出现的域名会自动获取解释。
+    </p>
+    <script>
+        document.getElementById('explainButton').addEventListener('click', async () => {
+            const button = document.getElementById('explainButton');
+            const status = document.getElementById('status');
+            
+            try {
+                button.disabled = true;
+                status.textContent = '正在处理...';
+                status.className = 'status';
+                
+                // 获取当前标签页
+                const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+                
+                // 发送消息到content script
+                const response = await chrome.tabs.sendMessage(tab.id, {action: 'EXPLAIN_DOMAINS'});
+                
+                if (response && response.status === 'processing') {
+                    status.textContent = '处理成功！';
+                    status.className = 'status active';
+                } else {
+                    throw new Error('处理失败');
+                }
+            } catch (error) {
+                status.textContent = '出错了：' + error.message;
+                status.className = 'status inactive';
+            } finally {
+                button.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html> 

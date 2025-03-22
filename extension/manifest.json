@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Domain Explainer",
+  "version": "1.0",
+  "description": "在semrush.com的域名排名页面为每个域名添加解释说明",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "management",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.semrush.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.semrush.com/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+} 
